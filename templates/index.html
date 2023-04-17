@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>YouTube Stock Video Summary by ChatGPT</title>
+	<link rel="stylesheet" type="text/css" href="static/style.css">
+</head>
+<body>
+	<div class="container">
+		<h1>StockDigestGPT</h1>
+		{% for report in reports %}
+			<div class="card">
+				<h2>{{ report.title }}</h2>
+				<p>{{ report.summary }}</p>
+				<p>{{ report.stats.views }} viewers, {{ report.stats.likes }} likes</p>
+				<a href="{{ report.transcript_link }}" target="_blank" >Click here to see the full transcript</a>
+				<a href="{{ report.video_link }}" target="_blank">Click here to watch the video</a>
+			</div>
+		{% endfor %}
+	</div>
+</body>
+</html>
