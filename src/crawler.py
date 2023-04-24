@@ -11,7 +11,7 @@ import sqlite3
 import urllib
 
 QUERY = 'US stocks'
-MAX_NUM_OF_CHANNELS = 3
+MAX_NUM_OF_CHANNELS = 10
 CHANNELS_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'channels.db'))
 DRIVER_PATH = r'C:\Users\Nature\Downloads\chromedriver_win32\chromedriver.exe'
 
@@ -42,8 +42,8 @@ def start_crawler():
 
     # Get search results
     channel_elements = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.yt-simple-endpoint.style-scope.ytd-channel-renderer")))[:MAX_NUM_OF_CHANNELS]
-    print(f'Number of channels found: {len(channel_elements)}')
-    channels = []
+
+    channels = set()
     for el in channel_elements:
         channel_id = el.get_attribute('href').split('/')[-1]
         print(f'Channel ID: {channel_id}')
@@ -51,10 +51,11 @@ def start_crawler():
         channel_title = channel_title_element.find_element(By.ID, 'text').text
         channel = (channel_id, channel_title)
         print(f'Channel Title: {channel_title}')
-        channels.append(channel)
+        channels.add(channel)
 
     # Insert channels into database
     c.executemany('INSERT OR IGNORE INTO channels VALUES (?, ?)', channels)
+    print(f'Number of channels added: {len(channels)}')
     conn.commit()
     conn.close()
 
