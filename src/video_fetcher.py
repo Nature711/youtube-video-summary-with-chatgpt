@@ -1,51 +1,20 @@
-import datetime
 import os
 import time
 import sqlite3
 from src.crawler import start_crawler
-from dotenv import load_dotenv
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 from src.summarizer import generate_summary
-from google.oauth2 import service_account
-from googleapiclient.errors import HttpError
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from datetime import datetime, timedelta
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # Constants
-MAX_RESULTS = 3  # Maximum number of videos to fetch per channel
-MAX_AGE = 24 * 60 * 60  # Maximum age (in seconds) of videos to fetch
-API_KEY = os.environ['YOUTUBE_DATA_API_KEY']
+MAX_RESULTS = 5  # Maximum number of videos to fetch per channel
 CHANNELS_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'channels.db'))
 VIDEOS_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'videos.db'))
-
-load_dotenv()
-
-# Build the YouTube API client
-youtube = build('youtube', 'v3', developerKey=API_KEY)
-
-def get_video_tanscript(video_id): 
-    # Call the YouTube Data API's videos.list method to retrieve the video resource
-    video_response = youtube.videos().list(
-        part="snippet",
-        id=video_id
-    ).execute()
-
-    # Extract the video title
-    video_title = video_response["items"][0]["snippet"]["title"]
-
-    # Call the YouTube Transcript API to retrieve the transcript
-    transcript_response = youtube.videos().list(
-        part="id,snippet",
-        id=video_id,
-        captions=True
-    ).execute()
-
-    # Extract the transcript
-    caption_track = transcript_response["items"][0]["snippet"]["captionTracks"][0]
-    caption_url = caption_track["baseUrl"]
-    caption_file = urllib.request.urlopen(caption_url)
-    caption_text = caption_file.read().decode("utf-8")
-
-    return caption_url, caption_text
+DRIVER_PATH = r'C:\Users\Nature\Downloads\chromedriver_win32\chromedriver.exe'
 
 def fetch_latest_videos():
 
@@ -56,60 +25,91 @@ def fetch_latest_videos():
     the videos.db file.
     """
     channels_conn = sqlite3.connect(CHANNELS_DB_PATH)
-    video_conn = sqlite3.connect(VIDEOS_DB_PATH)
-    channel_cur = channels_conn.cursor()
-    video_curs= video_conn.cursor()
-
-    # Create the videos table if it does not exist
-    video_curs.execute('CREATE TABLE IF NOT EXISTS videos (video_id TEXT PRIMARY KEY, '
-                    'posted_timestamp INTEGER, title TEXT, views INTEGER, likes INTEGER, caption_url TEXT, summary TEXT)')
-    video_curs.execute('CREATE INDEX IF NOT EXISTS idx_videos_posted_timestamp ON videos (posted_timestamp)')
+    videos_conn = sqlite3.connect(VIDEOS_DB_PATH)
+    channel_curs = channels_conn.cursor()
+    video_curs= videos_conn.cursor()
 
     # Fetch the channels from the channels database
-    channel_cur.execute('SELECT channel_id FROM channels')
-    channel_ids = [row[0] for row in channel_cur.fetchall()]
+    channel_curs.execute('SELECT channel_id FROM channels')
+
+    # Start the driver
+    driver = webdriver.Chrome(executable_path=DRIVER_PATH)
+    wait = WebDriverWait(driver, 10)
 
     # Fetch the latest videos for each channel and store them in the videos database
-    for channel_id in channel_ids:
-        print(f'fetching data for channel with id:{channel_id}')
-        try:
-            # Fetch the latest videos for the channel
-            channel_response = youtube.channels().list(
-                part='snippet',
-                forUsername=channel_id
-            ).execute()
-            channel_uid = channel_response['items'][0]['id']
+    for row in channel_curs.fetchall():
+        channel_id = row[0]
+        print(f"Processing videos for channel {channel_id}")
+        # Go to the YouTube page for the channel
+        url = f'https://www.youtube.com/channel/{channel_id}/videos'
+        driver.get(url)
 
-            print(f'channel uid: {channel_uid}')
+        # Get all the video elements
+        video_elements = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ytd-rich-grid-renderer ytd-rich-item-renderer")))[:MAX_RESULTS]
+        print(f'Number of videos found: {len(video_elements)}')
 
-            # Retrieve video resources for the channel
-            search_response = youtube.search().list(
-                part='id,snippet',
-                channelId=channel_id,
-                type='video',
-                order='date',
-                maxResults=MAX_RESULTS
-            ).execute()
+        videos_info = []
+        for video_element in video_elements:
+            # Get the video published timestamp
+            delta_str = video_element.find_element(By.ID, "metadata-line").text.split('•')[0].strip().split('\n')[1]
+            print(f'{delta_str}')
+            if 'ago' in delta_str:
+                # Extract time delta from timestamp string
+                if 'hour' in delta_str:
+                    delta = timedelta(hours=int(delta_str.split()[0]))
+                elif 'minute' in delta_str:
+                    delta = timedelta(minutes=int(delta_str.split()[0]))
+                else: continue # Ignore videos that are older than 24 hours
 
-            # Extract the video data and insert it into the videos database
-            videos = []
-            for search_result in search_response.get('items', []):
-                print(search_result)
-                video_id = search_result['id']['videoId']
-                published_at = datetime.datetime.fromisoformat(search_result['snippet']['publishedAt'][:-1])
-                posted_timestamp = int(published_at.timestamp())
-                age = int(time.time() - posted_timestamp)
-                if age <= MAX_AGE:
-                    title = search_result['snippet']['title']
-                    views = 0
-                    likes = 0
-                    caption_url, caption_text = get_video_tanscript(video_id=video_id)
-                    summary = generate_summary(caption_text)
-                    videos.append((video_id, posted_timestamp, title, views, likes, caption_url, summary))
+                # Get the timestamp of the video
+                posted_timestamp = datetime.now() - delta
+                # Extract the video ID
+                video_id = video_element.find_element(By.ID, "thumbnail").get_attribute('href').split('=')[-1]
+                print(f'Video id: {video_id}')
+                # Get the video title
+                title = video_element.find_element(By.ID, "video-title").text
+                print(f'Video title: {title}')
+                videos_info.append((video_id, posted_timestamp, title))
 
-            video_curs.executemany('INSERT OR IGNORE INTO videos VALUES (?, ?, ?, ?, ?, ?, ?)', videos)
-            video_conn.commit()
+        videos = []
+        for video_info in videos_info:
+            video_id, posted_timestamp, title = video_info
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            driver.get(video_url)
 
-        except HttpError as error:
-            print(f'An HTTP error {error.resp.status} occurred: {error.content}')
-            continue
+            # Wait for the views and likes elements to be present
+            views_element = wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="info"]/span[1]')))
+            likes_element = wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="segmented-like-button"]/ytd-toggle-button-renderer/yt-button-shape/button/div[2]/span')))
+            
+            # Extract the views and likes information
+            views = views_element.text.split(' ')[0]
+            likes = likes_element.text
+            print(f'Views: {views}')
+            print(f'Likes: {likes}')
+
+            transcript_url = None
+            transcript_text = None
+            summary = None
+            try: 
+                transcript_data = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+                transcript_text = ''
+                for item in transcript_data:
+                    transcript_text += item['text'] + ' '
+                print(f'Length of transcript: {len(transcript_text)} words')
+            except TranscriptsDisabled:
+                # Handle the case when transcripts are disabled for the video
+                print(f"Transcripts are disabled for the video with ID {video_id}")
+
+            # Generate the summary for transcript
+            summary = generate_summary(transcript_text)
+            print(f'Length of summary: {len(summary)} words')
+            
+            videos.append((video_id, posted_timestamp, title, views, likes, summary))
+
+        video_curs.executemany('INSERT OR IGNORE INTO videos VALUES (?, ?, ?, ?, ?, ?)', videos)
+        videos_conn.commit()
+
+        print(f'#### number of videos add: {len(videos)}')
+
+    videos_conn.close()
+    driver.quit()
