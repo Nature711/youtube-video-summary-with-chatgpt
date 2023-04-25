@@ -15,6 +15,27 @@ MAX_NUM_OF_CHANNELS = 10
 CHANNELS_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'channels.db'))
 DRIVER_PATH = r'C:\Users\Nature\Downloads\chromedriver_win32\chromedriver.exe'
 
+# Set up the Selenium driver
+driver = webdriver.Chrome(executable_path=DRIVER_PATH)
+wait = WebDriverWait(driver, 10)
+
+def get_channel_id_and_title(channel_link):
+    # Navigate to the YouTube channel page
+    driver.get(channel_link)
+    # Get the channel title
+    channel_title = driver.title.split(' - YouTube')[0]
+    # Simulate Ctrl+U to view page source
+    body = driver.find_element(By.TAG_NAME, 'body')
+    body.send_keys(Keys.CONTROL + 'u')
+    # Wait for page source to load
+    wait.until(EC.presence_of_element_located((By.TAG_NAME, 'html')))
+    # Find the channel ID in the page source
+    try:
+        channel_id = driver.page_source.split('itemprop="channelId" content="')[1].split('"')[0]
+    except IndexError:
+        channel_id = None
+    return channel_id, channel_title
+
 def start_crawler():
     conn = sqlite3.connect(CHANNELS_DB_PATH)
     c = conn.cursor()
@@ -28,29 +49,28 @@ def start_crawler():
     if c.fetchone()[0] > 0:
         conn.close()
         return
-
-    # Set up the Selenium driver
-    driver = webdriver.Chrome(executable_path=DRIVER_PATH)
-    wait = WebDriverWait(driver, 10)
-
+    
     # Navigate to the YouTube search page for channels related to the search query
     encoded_query = urllib.parse.quote(QUERY)
     search_url = f"https://www.youtube.com/results?search_query={encoded_query}&sp=EgIQAg%253D%253D"
+
     driver.get(search_url)
-
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'ytd-item-section-renderer')))
-
-    # Get search results
     channel_elements = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.yt-simple-endpoint.style-scope.ytd-channel-renderer")))[:MAX_NUM_OF_CHANNELS]
 
+    channel_links = set()
+    for channel_ele in channel_elements:
+        channel_link = channel_ele.get_attribute('href')
+        channel_links.add(channel_link)
+        print(f'found channel with link: {channel_link}')
+
     channels = set()
-    for el in channel_elements:
-        channel_id = el.get_attribute('href').split('/')[-1]
+    for link in channel_links:
+        channel_id, channel_title = get_channel_id_and_title(link)
+        if (channel_id is None): continue
         print(f'Channel ID: {channel_id}')
-        channel_title_element = driver.find_element(By.CLASS_NAME, 'ytd-channel-name')
-        channel_title = channel_title_element.find_element(By.ID, 'text').text
-        channel = (channel_id, channel_title)
         print(f'Channel Title: {channel_title}')
+        channel = (channel_id, channel_title)
         channels.add(channel)
 
     # Insert channels into database
